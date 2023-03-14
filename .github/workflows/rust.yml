@@ -106,13 +106,7 @@ jobs:
           cp README.md package/README.md
           cp LICENSE.md package/LICENSE.md
 
-      - name: Package Linux
-        if: runner.os == 'Linux'
-        run: |
-          cp ${{ env.CARGO_BUILD_DIR }}/ruffle_desktop package/ruffle
-          # We must enter the package/ directory in order to create a flat tarball (i.e. without a directory in it).
-          cd package
-          tar -czvf ../${{ env.PACKAGE_FILE }} *
+      
           
           - name: Upload a Build Artifact
             uses: actions/upload-artifact@v3.1.2
