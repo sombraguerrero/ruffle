@@ -2,6 +2,7 @@
 
 use crate::avm2::activation::Activation;
 use crate::avm2::object::{Object, TObject, TextFormatObject};
+use crate::avm2::parameters::ParametersExt;
 use crate::avm2::value::Value;
 use crate::avm2::Error;
 use crate::display_object::{AutoSizeMode, EditText, TDisplayObject, TextSelection};
@@ -79,11 +80,7 @@ pub fn set_auto_size<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let value = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let value = args.get_string(activation, 0)?;
         this.set_autosize(
             if &value == b"left" {
                 AutoSizeMode::Left
@@ -125,11 +122,7 @@ pub fn set_background<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let has_background = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let has_background = args.get_bool(0);
         this.set_has_background(activation.context.gc_context, has_background);
     }
 
@@ -160,10 +153,7 @@ pub fn set_background_color<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let rgb = args
-            .get(0)
-            .unwrap_or(&Value::Undefined)
-            .coerce_to_u32(activation)?;
+        let rgb = args.get_u32(activation, 0)?;
         let color = Color::from_rgb(rgb, 255);
         this.set_background_color(activation.context.gc_context, color);
     }
@@ -195,11 +185,7 @@ pub fn set_border<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let border = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let border = args.get_bool(0);
         this.set_has_border(activation.context.gc_context, border);
     }
 
@@ -230,10 +216,7 @@ pub fn set_border_color<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let rgb = args
-            .get(0)
-            .unwrap_or(&Value::Undefined)
-            .coerce_to_u32(activation)?;
+        let rgb = args.get_u32(activation, 0)?;
         let color = Color::from_rgb(rgb, 255);
         this.set_border_color(activation.context.gc_context, color);
     }
@@ -319,11 +302,7 @@ pub fn set_display_as_password<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_password = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let is_password = args.get_bool(0);
 
         this.set_password(is_password, &mut activation.context);
     }
@@ -355,11 +334,7 @@ pub fn set_embed_fonts<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_embed_fonts = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let is_embed_fonts = args.get_bool(0);
 
         this.set_is_device_font(&mut activation.context, !is_embed_fonts);
     }
@@ -391,10 +366,7 @@ pub fn set_html_text<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let html_text = args
-            .get(0)
-            .unwrap_or(&Value::Undefined)
-            .coerce_to_string(activation)?;
+        let html_text = args.get_string(activation, 0)?;
 
         this.set_is_html(&mut activation.context, true);
         this.set_html_text(&html_text, &mut activation.context);
@@ -442,11 +414,7 @@ pub fn set_multiline<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_multiline = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let is_multiline = args.get_bool(0);
 
         this.set_multiline(is_multiline, &mut activation.context);
     }
@@ -478,11 +446,7 @@ pub fn set_selectable<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_selectable = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let is_selectable = args.get_bool(0);
 
         this.set_selectable(is_selectable, &mut activation.context);
     }
@@ -514,10 +478,7 @@ pub fn set_text<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let text = args
-            .get(0)
-            .unwrap_or(&Value::Undefined)
-            .coerce_to_string(activation)?;
+        let text = args.get_string(activation, 0)?;
 
         this.set_is_html(&mut activation.context, false);
         this.set_text(&text, &mut activation.context);
@@ -635,11 +596,7 @@ pub fn set_type<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_editable = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let is_editable = args.get_string(activation, 0)?;
 
         if &is_editable == b"input" {
             this.set_editable(true, &mut activation.context);
@@ -677,11 +634,7 @@ pub fn set_word_wrap<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let is_word_wrap = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let is_word_wrap = args.get_bool(0);
 
         this.set_word_wrap(is_word_wrap, &mut activation.context);
     }
@@ -698,11 +651,7 @@ pub fn append_text<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let new_text = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let new_text = args.get_string(activation, 0)?;
         let existing_length = this.text_length();
 
         this.replace_text(
@@ -760,11 +709,7 @@ pub fn replace_selected_text<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_edit_text())
     {
-        let value = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let value = args.get_string(activation, 0)?;
         let selection = this
             .selection()
             .unwrap_or_else(|| TextSelection::for_position(0));
@@ -799,11 +744,7 @@ pub fn replace_text<'gc>(
             .cloned()
             .unwrap_or(Value::Undefined)
             .coerce_to_u32(activation)?;
-        let value = args
-            .get(2)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let value = args.get_string(activation, 2)?;
 
         this.replace_text(
             begin_index as usize,
@@ -927,11 +868,7 @@ pub fn set_anti_alias_type<'gc>(
         .and_then(|this| this.as_edit_text())
     {
         let old_settings = this.render_settings();
-        let new_type = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let new_type = args.get_string(activation, 0)?;
 
         if &new_type == b"advanced" {
             this.set_render_settings(
@@ -977,11 +914,7 @@ pub fn set_grid_fit_type<'gc>(
         .and_then(|this| this.as_edit_text())
     {
         let old_settings = this.render_settings();
-        let new_type = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let new_type = args.get_string(activation, 0)?;
 
         if &new_type == b"pixel" {
             this.set_render_settings(

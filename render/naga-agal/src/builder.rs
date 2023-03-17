@@ -140,7 +140,9 @@ impl VertexAttributeFormat {
             VertexAttributeFormat::Float2 => (VectorSize::Bi, 4, ScalarKind::Float),
             VertexAttributeFormat::Float3 => (VectorSize::Tri, 4, ScalarKind::Float),
             VertexAttributeFormat::Float4 => (VectorSize::Quad, 4, ScalarKind::Float),
-            VertexAttributeFormat::Bytes4 => (VectorSize::Quad, 1, ScalarKind::Uint),
+            // The conversion is done by wgpu, since we specify
+            // `wgpu::VertexFormat::Unorm8x4` in `CurrentPipeline::rebuild_pipeline`
+            VertexAttributeFormat::Bytes4 => (VectorSize::Quad, 4, ScalarKind::Float),
         };
 
         module.types.insert(
@@ -239,6 +241,9 @@ impl VertexAttributeFormat {
                 })
             }
             VertexAttributeFormat::Float4 => base_expr,
+            // The conversion is done by wgpu, since we specify
+            // `wgpu::VertexFormat::Unorm8x4` in `CurrentPipeline::rebuild_pipeline`
+            VertexAttributeFormat::Bytes4 => base_expr,
             _ => {
                 return Err(Error::Unimplemented(format!(
                     "Unsupported conversion from {self:?} to float4",
@@ -611,6 +616,10 @@ impl<'a> NagaBuilder<'a> {
                 .ok_or(Error::MissingVertexAttributeData(index))?
                 .to_naga_type(&mut self.module);
 
+            // Function arguments might not be in the same order as the
+            // corresponding binding indices (e.g. the first argument might have binding '2').
+            // However, we only access the `FunctionArgument` expression through the `vertex_input_expressions`
+            // vec, which is indexed by the binding index.
             self.func.arguments.push(FunctionArgument {
                 name: None,
                 ty,
@@ -621,11 +630,13 @@ impl<'a> NagaBuilder<'a> {
                 }),
             });
 
-            // Arguments map one-to-one to vertex attributes.
-            let expr = self
-                .func
-                .expressions
-                .append(Expression::FunctionArgument(index as u32), Span::UNDEFINED);
+            let arg_index = self.func.arguments.len() - 1;
+
+            // Arguments map one-tom-one to vertex attributes.
+            let expr = self.func.expressions.append(
+                Expression::FunctionArgument(arg_index as u32),
+                Span::UNDEFINED,
+            );
             self.vertex_input_expressions[index] = Some(expr);
         }
         Ok(self.vertex_input_expressions[index].unwrap())

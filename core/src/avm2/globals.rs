@@ -69,6 +69,7 @@ pub struct SystemClasses<'gc> {
     pub textfield: ClassObject<'gc>,
     pub textformat: ClassObject<'gc>,
     pub graphics: ClassObject<'gc>,
+    pub igraphicsdata: ClassObject<'gc>,
     pub loaderinfo: ClassObject<'gc>,
     pub bytearray: ClassObject<'gc>,
     pub stage: ClassObject<'gc>,
@@ -168,6 +169,7 @@ impl<'gc> SystemClasses<'gc> {
             textfield: object,
             textformat: object,
             graphics: object,
+            igraphicsdata: object,
             loaderinfo: object,
             bytearray: object,
             stage: object,
@@ -535,11 +537,6 @@ pub fn load_player_globals<'gc>(
     // defined in the playerglobal swf.
 
     // package `flash.media`
-    class(
-        flash::media::sound::create_class(activation),
-        script,
-        activation,
-    )?;
     avm2_system_class!(
         soundtransform,
         activation,
@@ -551,12 +548,6 @@ pub fn load_player_globals<'gc>(
         script,
         activation,
     )?;
-    avm2_system_class!(
-        soundchannel,
-        activation,
-        flash::media::soundchannel::create_class(activation),
-        script
-    );
 
     Ok(())
 }
@@ -578,6 +569,7 @@ fn load_playerglobal<'gc>(
     activation.avm2().native_method_table = native::NATIVE_METHOD_TABLE;
     activation.avm2().native_instance_allocator_table = native::NATIVE_INSTANCE_ALLOCATOR_TABLE;
     activation.avm2().native_instance_init_table = native::NATIVE_INSTANCE_INIT_TABLE;
+    activation.avm2().native_call_handler_table = native::NATIVE_CALL_HANDLER_TABLE;
 
     let movie = SwfMovie::from_data(PLAYERGLOBAL, "file:///".into(), None)
         .expect("playerglobal.swf should be valid");
@@ -591,8 +583,14 @@ fn load_playerglobal<'gc>(
             let do_abc = reader
                 .read_do_abc_2()
                 .expect("playerglobal.swf should be valid");
-            Avm2::do_abc(&mut activation.context, do_abc.data, do_abc.flags, domain)
-                .expect("playerglobal.swf should be valid");
+            Avm2::do_abc(
+                &mut activation.context,
+                do_abc.data,
+                None,
+                do_abc.flags,
+                domain,
+            )
+            .expect("playerglobal.swf should be valid");
         } else if tag_code != TagCode::End {
             panic!("playerglobal should only contain `DoAbc2` tag - found tag {tag_code:?}")
         }
@@ -629,6 +627,7 @@ fn load_playerglobal<'gc>(
             ("flash.display", "BitmapData", bitmapdata),
             ("flash.display", "Scene", scene),
             ("flash.display", "FrameLabel", framelabel),
+            ("flash.display", "IGraphicsData", igraphicsdata),
             ("flash.display", "Graphics", graphics),
             ("flash.display", "LoaderInfo", loaderinfo),
             ("flash.display", "MovieClip", movieclip),
@@ -671,6 +670,7 @@ fn load_playerglobal<'gc>(
             ("flash.geom", "Rectangle", rectangle),
             ("flash.geom", "Transform", transform),
             ("flash.geom", "ColorTransform", colortransform),
+            ("flash.media", "SoundChannel", soundchannel),
             ("flash.net", "URLVariables", urlvariables),
             ("flash.utils", "ByteArray", bytearray),
             ("flash.text", "StaticText", statictext),

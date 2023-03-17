@@ -407,6 +407,10 @@ impl<'gc> EditText<'gc> {
         !self.0.read().flags.contains(EditTextFlag::READ_ONLY)
     }
 
+    pub fn was_static(self) -> bool {
+        self.0.read().flags.contains(EditTextFlag::WAS_STATIC)
+    }
+
     pub fn set_editable(self, is_editable: bool, context: &mut UpdateContext<'_, 'gc>) {
         self.0
             .write(context.gc_context)
@@ -1853,22 +1857,29 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
         // The text is hovered if the mouse is over any child nodes.
         if self.visible()
             && self.mouse_enabled()
-            && self.is_selectable()
             && self.hit_test_shape(context, point, HitTestOptions::MOUSE_PICK)
         {
-            Avm2MousePick::Hit((*self).into())
+            if self.was_static() {
+                Avm2MousePick::PropagateToParent
+            } else {
+                Avm2MousePick::Hit((*self).into())
+            }
         } else {
             Avm2MousePick::Miss
         }
     }
 
     fn mouse_cursor(self, _context: &mut UpdateContext<'_, 'gc>) -> MouseCursor {
-        MouseCursor::IBeam
+        if self.is_selectable() {
+            MouseCursor::IBeam
+        } else {
+            MouseCursor::Arrow
+        }
     }
 }
 
 bitflags::bitflags! {
-    #[derive(Collect)]
+    #[derive(Clone, Copy, Collect)]
     #[collect(require_static)]
     struct EditTextFlag: u16 {
         const FIRING_VARIABLE_BINDING = 1 << 0;
@@ -1885,8 +1896,8 @@ bitflags::bitflags! {
         const WAS_STATIC = 1 << 10;
         const BORDER = 1 << 11;
         const NO_SELECT = 1 << 12;
-        const SWF_FLAGS = Self::READ_ONLY.bits | Self::PASSWORD.bits | Self::MULTILINE.bits | Self::WORD_WRAP.bits | Self::USE_OUTLINES.bits |
-                          Self::HTML.bits | Self::WAS_STATIC.bits | Self::BORDER.bits | Self::NO_SELECT.bits;
+        const SWF_FLAGS = Self::READ_ONLY.bits() | Self::PASSWORD.bits() | Self::MULTILINE.bits() | Self::WORD_WRAP.bits() | Self::USE_OUTLINES.bits() |
+                          Self::HTML.bits() | Self::WAS_STATIC.bits() | Self::BORDER.bits() | Self::NO_SELECT.bits();
     }
 }
 

@@ -19,10 +19,12 @@ use swf::avm2::types::{
     Class as AbcClass, Instance as AbcInstance, Method as AbcMethod, MethodBody as AbcMethodBody,
 };
 
+use super::method::ParamConfig;
 use super::string::AvmString;
 
 bitflags! {
     /// All possible attributes for a given class.
+    #[derive(Clone, Copy)]
     pub struct ClassAttributes: u8 {
         /// Class is sealed, attempts to set or init dynamic properties on an
         /// object will generate a runtime error.
@@ -301,6 +303,7 @@ impl<'gc> Class<'gc> {
         let instance_init = unit.load_method(abc_instance.init_method, false, activation)?;
         let mut native_instance_init = instance_init.clone();
         let class_init = unit.load_method(abc_class.init_method, false, activation)?;
+        let mut native_call_handler = None;
 
         let mut attributes = ClassAttributes::empty();
         attributes.set(ClassAttributes::SEALED, abc_instance.is_sealed);
@@ -328,6 +331,22 @@ impl<'gc> Class<'gc> {
                 );
                 native_instance_init = method;
             }
+
+            if let Some((name, table_native_call_handler)) =
+                activation.avm2().native_call_handler_table[class_index as usize]
+            {
+                let method = Method::from_builtin_and_params(
+                    table_native_call_handler,
+                    name,
+                    vec![ParamConfig::of_type(
+                        "val",
+                        Multiname::any(activation.context.gc_context),
+                    )],
+                    false,
+                    activation.context.gc_context,
+                );
+                native_call_handler = Some(method);
+            }
         }
 
         Ok(GcCell::allocate(
@@ -345,7 +364,7 @@ impl<'gc> Class<'gc> {
                 instance_traits: Vec::new(),
                 class_init,
                 class_initializer_called: false,
-                call_handler: None,
+                call_handler: native_call_handler,
                 class_traits: Vec::new(),
                 specialized_class_init: Method::from_builtin(
                     |_, _, _| Ok(Value::Undefined),

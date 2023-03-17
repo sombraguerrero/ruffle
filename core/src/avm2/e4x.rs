@@ -1,5 +1,5 @@
 use std::{
-    cell::Ref,
+    cell::{Ref, RefMut},
     fmt::{self, Debug},
 };
 
@@ -9,7 +9,10 @@ use quick_xml::{
     Reader,
 };
 
+use crate::avm2::{error::type_error, TObject};
+
 use super::{object::E4XOrXml, string::AvmString, Activation, Error, Multiname, Value};
+use crate::string::{WStr, WString};
 
 /// The underlying XML node data, based on E4XNode in avmplus
 /// This wrapped by XMLObject when necessary (see `E4XOrXml`)
@@ -76,7 +79,22 @@ impl<'gc> E4XNode<'gc> {
         ))
     }
 
-    fn append_child(
+    pub fn attribute(
+        mc: MutationContext<'gc, '_>,
+        name: AvmString<'gc>,
+        value: AvmString<'gc>,
+    ) -> Self {
+        E4XNode(GcCell::allocate(
+            mc,
+            E4XNodeData {
+                parent: None,
+                local_name: Some(name),
+                kind: E4XNodeKind::Attribute(value),
+            },
+        ))
+    }
+
+    pub fn append_child(
         &self,
         gc_context: MutationContext<'gc, '_>,
         child: Self,
@@ -116,14 +134,29 @@ impl<'gc> E4XNode<'gc> {
     /// The caller is responsible for validating that the number of top-level nodes
     /// is correct (for XML, there should be exactly one.)
     pub fn parse(
-        value: Value<'gc>,
+        mut value: Value<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Vec<Self>, Error<'gc>> {
-        let string = match value {
+        let string = match &value {
             // The docs claim that this throws a TypeError, but it actually doesn't
             Value::Null | Value::Undefined => AvmString::default(),
             // The docs claim that only String, Number or Boolean are accepted, but that's also a lie
-            value => value.coerce_to_string(activation)?,
+            val => {
+                if let Some(obj) = val.as_object() {
+                    if let Some(xml) = obj.as_xml_object() {
+                        value = xml.call_public_property("toXMLString", &[], activation)?;
+                    } else if let Some(list) = obj.as_xml_list_object() {
+                        if list.length() == 1 {
+                            value = list.children_mut(activation.context.gc_context)[0]
+                                .get_or_create_xml(activation)
+                                .call_public_property("toXMLString", &[], activation)?;
+                        } else {
+                            return Err(Error::AvmError(type_error(activation, "Error #1088: The markup in the document following the root element must be well-formed.", 1088)?));
+                        }
+                    }
+                }
+                value.coerce_to_string(activation)?
+            }
         };
 
         let data_utf8 = string.to_utf8_lossy();
@@ -306,6 +339,17 @@ impl<'gc> E4XNode<'gc> {
         }
     }
 
+    pub fn descendants(&self, name: &Multiname<'gc>, out: &mut Vec<E4XOrXml<'gc>>) {
+        if let E4XNodeKind::Element { children, .. } = &self.0.read().kind {
+            for child in children {
+                if child.matches_name(name) {
+                    out.push(E4XOrXml::E4X(*child));
+                }
+                child.descendants(name, out)
+            }
+        }
+    }
+
     pub fn has_simple_content(&self) -> bool {
         match &self.0.read().kind {
             E4XNodeKind::Element { children, .. } => children
@@ -333,11 +377,7 @@ impl<'gc> E4XNode<'gc> {
                     );
                 }
 
-                Err(format!(
-                    "XML.toString(): Not yet implemented non-simple {:?} children {:?}",
-                    self, children
-                )
-                .into())
+                return to_xml_string(E4XOrXml::E4X(*self), activation);
             }
             other => Err(format!("XML.toString(): Not yet implemented for {other:?}").into()),
         }
@@ -345,19 +385,17 @@ impl<'gc> E4XNode<'gc> {
 
     pub fn xml_to_xml_string(
         &self,
-        _activation: &mut Activation<'_, 'gc>,
+        activation: &mut Activation<'_, 'gc>,
     ) -> Result<AvmString<'gc>, Error<'gc>> {
-        match &self.0.read().kind {
-            E4XNodeKind::Text(text) => Ok(*text),
-            E4XNodeKind::Element { .. } => {
-                Err(format!("XML.toXMLString(): Not yet implemented element {:?}", self).into())
-            }
-            other => Err(format!("XML.toXMLString(): Not yet implemented for {other:?}").into()),
-        }
+        return to_xml_string(E4XOrXml::E4X(*self), activation);
     }
 
     pub fn kind(&self) -> Ref<'_, E4XNodeKind<'gc>> {
         Ref::map(self.0.read(), |r| &r.kind)
+    }
+
+    pub fn kind_mut(&self, mc: MutationContext<'gc, '_>) -> RefMut<'_, E4XNodeKind<'gc>> {
+        RefMut::map(self.0.write(mc), |r| &mut r.kind)
     }
 
     pub fn ptr_eq(first: E4XNode<'gc>, second: E4XNode<'gc>) -> bool {
@@ -381,4 +419,109 @@ pub fn simple_content_to_string<'gc>(
         out = AvmString::concat(activation.context.gc_context, out, child_str);
     }
     Ok(out)
+}
+
+// Implementation of `EscapeAttributeValue` from ECMA-357 (10.2.1.2)
+pub fn escape_attribute_value(s: AvmString) -> WString {
+    let mut r = WString::with_capacity(s.len(), s.is_wide());
+    for c in &s {
+        let escape: &[u8] = match u8::try_from(c) {
+            Ok(b'"') => b"&quot;",
+            Ok(b'<') => b"&lt;",
+            Ok(b'&') => b"&amp;",
+            Ok(b'\x0A') => b"&#xA;",
+            Ok(b'\x0D') => b"&#xD;",
+            Ok(b'\x09') => b"&#x9;",
+            _ => {
+                r.push(c);
+                continue;
+            }
+        };
+
+        r.push_str(WStr::from_units(escape));
+    }
+    r
+}
+
+// Implementation of `EscapeElementValue` from ECMA-357 (10.2.1.1)
+pub fn escape_element_value(s: AvmString) -> WString {
+    let mut r = WString::with_capacity(s.len(), s.is_wide());
+    for c in &s {
+        let escape: &[u8] = match u8::try_from(c) {
+            Ok(b'<') => b"&lt;",
+            Ok(b'>') => b"&gt;",
+            Ok(b'&') => b"&amp;",
+            _ => {
+                r.push(c);
+                continue;
+            }
+        };
+
+        r.push_str(WStr::from_units(escape));
+    }
+    r
+}
+
+fn to_xml_string_inner<'gc>(xml: E4XOrXml<'gc>, buf: &mut WString) -> Result<(), Error<'gc>> {
+    // FIXME: Implement pretty printing and namespace support.
+
+    let node = xml.node();
+    let node_kind = node.kind();
+    let (children, attributes) = match &*node_kind {
+        E4XNodeKind::Text(text) => {
+            buf.push_str(&escape_element_value(*text));
+            return Ok(());
+        }
+        E4XNodeKind::Attribute(_)
+        | E4XNodeKind::Comment(_)
+        | E4XNodeKind::ProcessingInstruction(_)
+        | E4XNodeKind::CData(_) => {
+            return Err(format!("ToXMLString: Not yet implemented node {:?}", node_kind).into())
+        }
+        E4XNodeKind::Element {
+            children,
+            attributes,
+        } => (children, attributes),
+    };
+
+    buf.push_char('<');
+    buf.push_str(&node.local_name().unwrap());
+
+    for attribute in attributes {
+        if let E4XNodeKind::Attribute(value) = &*attribute.kind() {
+            buf.push_char(' ');
+            buf.push_str(&attribute.local_name().unwrap());
+            buf.push_char('=');
+            buf.push_char('"');
+            buf.push_str(&escape_attribute_value(*value));
+            buf.push_char('"');
+        }
+    }
+
+    if children.is_empty() {
+        buf.push_utf8("/>");
+        return Ok(());
+    }
+
+    buf.push_char('>');
+
+    for child in children {
+        to_xml_string_inner(E4XOrXml::E4X(*child), buf)?;
+    }
+
+    buf.push_utf8("</");
+    buf.push_str(&node.local_name().unwrap());
+    buf.push_char('>');
+
+    Ok(())
+}
+
+// Implementation of `ToXMLString` from ECMA-357 (10.2.1)
+pub fn to_xml_string<'gc>(
+    xml: E4XOrXml<'gc>,
+    activation: &mut Activation<'_, 'gc>,
+) -> Result<AvmString<'gc>, Error<'gc>> {
+    let mut buf = WString::new();
+    to_xml_string_inner(xml, &mut buf)?;
+    Ok(AvmString::new(activation.context.gc_context, buf))
 }

@@ -3,6 +3,7 @@
 use crate::avm2::array::ArrayStorage;
 use crate::avm2::class::Class;
 use crate::avm2::domain::Domain;
+use crate::avm2::e4x::{escape_attribute_value, escape_element_value};
 use crate::avm2::error::{make_null_or_undefined_error, type_error};
 use crate::avm2::method::{BytecodeMethod, Method, ParamConfig};
 use crate::avm2::object::{
@@ -17,7 +18,7 @@ use crate::avm2::Namespace;
 use crate::avm2::QName;
 use crate::avm2::{value, Avm2, Error};
 use crate::context::UpdateContext;
-use crate::string::{AvmString, WStr, WString};
+use crate::string::AvmString;
 use crate::swf::extensions::ReadSwfExt;
 use gc_arena::{Gc, GcCell};
 use smallvec::SmallVec;
@@ -1029,6 +1030,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                 Op::FindProperty { index } => self.op_find_property(method, index),
                 Op::FindPropStrict { index } => self.op_find_prop_strict(method, index),
                 Op::GetLex { index } => self.op_get_lex(method, index),
+                Op::GetDescendants { index } => self.op_get_descendants(method, index),
                 Op::GetSlot { index } => self.op_get_slot(index),
                 Op::SetSlot { index } => self.op_set_slot(index),
                 Op::GetGlobalSlot { index } => self.op_get_global_slot(index),
@@ -1805,6 +1807,25 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let result: Value<'gc> = found?.into();
 
         self.push_stack(result);
+
+        Ok(FrameControl::Continue)
+    }
+
+    fn op_get_descendants(
+        &mut self,
+        method: Gc<'gc, BytecodeMethod<'gc>>,
+        index: Index<AbcMultiname>,
+    ) -> Result<FrameControl<'gc>, Error<'gc>> {
+        let multiname = self.pool_multiname_and_initialize(method, index)?;
+        let object = self.pop_stack().coerce_to_object_or_typeerror(self, None)?;
+        let descendants = object.call_public_property(
+            "descendants",
+            &[multiname
+                .to_qualified_name_or_star(self.context.gc_context)
+                .into()],
+            self,
+        )?;
+        self.push_stack(descendants);
 
         Ok(FrameControl::Continue)
     }
@@ -2906,23 +2927,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let s = self.pop_stack().coerce_to_string(self)?;
 
         // Implementation of `EscapeAttributeValue` from ECMA-357(10.2.1.2)
-        let mut r = WString::with_capacity(s.len(), s.is_wide());
-        for c in &s {
-            let escape: &[u8] = match u8::try_from(c) {
-                Ok(b'"') => b"&quot;",
-                Ok(b'<') => b"&lt;",
-                Ok(b'&') => b"&amp;",
-                Ok(b'\x0A') => b"&#xA;",
-                Ok(b'\x0D') => b"&#xD;",
-                Ok(b'\x09') => b"&#x9;",
-                _ => {
-                    r.push(c);
-                    continue;
-                }
-            };
-
-            r.push_str(WStr::from_units(escape));
-        }
+        let r = escape_attribute_value(s);
         self.push_stack(AvmString::new(self.context.gc_context, r));
 
         Ok(FrameControl::Continue)
@@ -2933,21 +2938,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let s = self.pop_stack().coerce_to_string(self)?;
 
         // contrary to the avmplus documentation, this escapes the value on the top of the stack using EscapeElementValue from ECMA-357 *NOT* EscapeAttributeValue.
-        // Implementation of `EscapeElementValue` from ECMA-357(10.2.1.1)
-        let mut r = WString::with_capacity(s.len(), s.is_wide());
-        for c in &s {
-            let escape: &[u8] = match u8::try_from(c) {
-                Ok(b'<') => b"&lt;",
-                Ok(b'>') => b"&gt;",
-                Ok(b'&') => b"&amp;",
-                _ => {
-                    r.push(c);
-                    continue;
-                }
-            };
-
-            r.push_str(WStr::from_units(escape));
-        }
+        let r = escape_element_value(s);
         self.push_stack(AvmString::new(self.context.gc_context, r));
 
         Ok(FrameControl::Continue)

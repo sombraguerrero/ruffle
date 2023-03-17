@@ -10,7 +10,7 @@ use std::cell::Cell;
 use wgpu::util::StagingBelt;
 use wgpu::{
     BindGroup, BufferDescriptor, BufferUsages, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureUsages,
+    TextureUsages, COPY_BUFFER_ALIGNMENT,
 };
 use wgpu::{CommandEncoder, Extent3d, RenderPass};
 
@@ -252,7 +252,7 @@ impl WgpuContext3D {
                 Context3DCommand::UploadToVertexBuffer {
                     buffer,
                     start_vertex,
-                    data_per_vertex,
+                    data32_per_vertex,
                     data,
                 } => {
                     let buffer: Rc<VertexBufferWrapper> = buffer
@@ -261,14 +261,17 @@ impl WgpuContext3D {
                         .downcast::<VertexBufferWrapper>()
                         .unwrap();
 
-                    self.buffer_staging_belt
-                        .write_buffer(
-                            &mut buffer_command_encoder,
-                            &buffer.buffer,
-                            (*start_vertex * *data_per_vertex * std::mem::size_of::<f32>()) as u64,
-                            NonZeroU64::new(data.len() as u64).unwrap(),
-                            &self.descriptors.device,
-                        )
+                    let align = COPY_BUFFER_ALIGNMENT as usize;
+                    let rounded_size = (data.len() + align - 1) & !(align - 1);
+
+                    self.buffer_staging_belt.write_buffer(
+                        &mut buffer_command_encoder,
+                        &buffer.buffer,
+                        (*start_vertex * (*data32_per_vertex as usize) * std::mem::size_of::<f32>())
+                            as u64,
+                        NonZeroU64::new(rounded_size as u64).unwrap(),
+                        &self.descriptors.device,
+                    )[..data.len()]
                         .copy_from_slice(data);
                 }
 
@@ -874,12 +877,30 @@ fn make_render_pass<'a>(
 
 fn convert_texture_format(input: Context3DTextureFormat) -> Result<wgpu::TextureFormat, Error> {
     match input {
-        // Note - webgl doesn't support Bgra, so we use Rgba instead.
-        // This optimizes the case where we upload from a BitmapData
-        // (since the bytes will already be in the correct format),
-        // and penalizes the case where we upload from a ByteArray
-        // (we'll need to convert from Bgra to Rgba).
+        // All of these formats are unsupported by wgpu to various degrees:
+        // * Bgra doesn't exist in webgl
+        // * None of the other formats seem to exist at all in wgpu
+        //
+        // Instead, we just use Rgba8Unorm, which is the closest thing we have.
+        // When we implement Texture.uploadFromByteArray, we'll need to convert
+        // the user-supplied data to Rgba8Unorm.
+        //
+        // The Rgba8Unorm format stores more data for each channel, so this
+        // will result in (hopefully minor) rendering differences.
         Context3DTextureFormat::Bgra => Ok(TextureFormat::Rgba8Unorm),
+        Context3DTextureFormat::BgraPacked => Ok(TextureFormat::Rgba8Unorm),
+        // Wgpu doesn't have 'Rgb8Unorm', so we use 'Rgba8Unorm' instead.
+        // Applications *should* use an opaque Bitmap with this format, so the
+        // alpha channel should be set to 1.0 and have no effect.
+        // FIXME: Validate that this is actually the case, and throw an
+        // error if we get an unexpected bitmap from ActionScript
+        Context3DTextureFormat::BgrPacked => Ok(TextureFormat::Rgba8Unorm),
+        // Starling claims that this is dxt5, which has an alpha channel
+        Context3DTextureFormat::CompressedAlpha => Ok(TextureFormat::Rgba8Unorm),
+        // Starling claims that this is dxt1. It's unclear if there's supposed
+        // to be an alpha channel, so we're relying on SWFS doing "the right thing"
+        // as with BgrPacked
+        Context3DTextureFormat::Compressed => Ok(TextureFormat::Rgba8Unorm),
         _ => Err(Error::Unimplemented(
             format!("Texture format {input:?}").into(),
         )),

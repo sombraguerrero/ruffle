@@ -803,6 +803,7 @@ bitflags! {
     /// The array options that a given sort operation may use.
     ///
     /// These are provided as a number by the VM and converted into bitflags.
+    #[derive(Clone, Copy)]
     pub struct SortOptions: u8 {
         /// Request case-insensitive string value sort.
         const CASE_INSENSITIVE     = 1 << 0;
@@ -1215,6 +1216,27 @@ pub fn sort_on<'gc>(
     Ok(0.into())
 }
 
+/// Implements `Array.removeAt`
+pub fn remove_at<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Option<Object<'gc>>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    if let Some(this) = this {
+        if let Some(mut array) = this.as_array_storage_mut(activation.context.gc_context) {
+            let index = args
+                .get(0)
+                .cloned()
+                .unwrap_or(Value::Undefined)
+                .coerce_to_i32(activation)?;
+
+            return Ok(array.remove(index).unwrap_or(Value::Undefined));
+        }
+    }
+
+    Ok(Value::Undefined)
+}
+
 /// Construct `Array`'s class.
 pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> GcCell<'gc, Class<'gc>> {
     let mc = activation.context.gc_context;
@@ -1235,6 +1257,7 @@ pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> GcCell<'gc, Cl
         ("toString", to_string),
         ("toLocaleString", to_locale_string),
         ("valueOf", value_of),
+        ("removeAt", remove_at),
     ];
     write.define_builtin_instance_methods(
         mc,

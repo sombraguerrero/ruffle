@@ -743,7 +743,13 @@ impl<'gc> MovieClip<'gc> {
             let domain = context.library.library_for_movie_mut(movie).avm2_domain();
 
             // DoAbc tag seems to be equivalent to a DoAbc2 with Lazy flag set
-            if let Err(e) = Avm2::do_abc(context, data, swf::DoAbc2Flag::LAZY_INITIALIZE, domain) {
+            if let Err(e) = Avm2::do_abc(
+                context,
+                data,
+                None,
+                swf::DoAbc2Flag::LAZY_INITIALIZE,
+                domain,
+            ) {
                 tracing::warn!("Error loading ABC file: {}", e);
             }
         }
@@ -767,7 +773,10 @@ impl<'gc> MovieClip<'gc> {
             let movie = self.movie();
             let domain = context.library.library_for_movie_mut(movie).avm2_domain();
 
-            if let Err(e) = Avm2::do_abc(context, do_abc.data, do_abc.flags, domain) {
+            let name = do_abc.name.to_str_lossy(reader.encoding());
+            let name = AvmString::new_utf8(context.gc_context, name);
+
+            if let Err(e) = Avm2::do_abc(context, do_abc.data, Some(name), do_abc.flags, domain) {
                 tracing::warn!("Error loading ABC file: {}", e);
             }
         }
@@ -909,10 +918,6 @@ impl<'gc> MovieClip<'gc> {
     #[allow(dead_code)]
     pub fn playing(self) -> bool {
         self.0.read().playing()
-    }
-
-    pub fn set_skip_next_enter_frame(self, mc: MutationContext<'gc, '_>, skip: bool) {
-        self.0.write(mc).set_skip_next_enter_frame(skip);
     }
 
     pub fn programmatically_played(self) -> bool {
@@ -1681,6 +1686,8 @@ impl<'gc> MovieClip<'gc> {
         }
 
         let frame_before_rewind = self.current_frame();
+        self.base_mut(context.gc_context)
+            .set_skip_next_enter_frame(false);
 
         // Flash gotos are tricky:
         // 1) Conceptually, a goto should act like the playhead is advancing forward or
@@ -2251,16 +2258,20 @@ impl<'gc> MovieClip<'gc> {
         {
             true
         } else {
-            let mut activation = Avm1Activation::from_stub(
-                context.reborrow(),
-                ActivationIdentifier::root("[Mouse Pick]"),
-            );
-            let object = self.object().coerce_to_object(&mut activation);
+            let object = self.object();
+            if let Avm1Value::Object(object) = object {
+                let mut activation = Avm1Activation::from_stub(
+                    context.reborrow(),
+                    ActivationIdentifier::root("[Mouse Pick]"),
+                );
 
-            ClipEvent::BUTTON_EVENT_METHODS
-                .iter()
-                .copied()
-                .any(|handler| object.has_property(&mut activation, handler.into()))
+                ClipEvent::BUTTON_EVENT_METHODS
+                    .iter()
+                    .copied()
+                    .any(|handler| object.has_property(&mut activation, handler.into()))
+            } else {
+                false
+            }
         }
     }
 
@@ -2335,14 +2346,29 @@ impl<'gc> TDisplayObject<'gc> for MovieClip<'gc> {
     }
 
     fn enter_frame(&self, context: &mut UpdateContext<'_, 'gc>) {
+        let skip_frame = self.base().should_skip_next_enter_frame();
         //Child removals from looping gotos appear to resolve in reverse order.
         for child in self.iter_render_list().rev() {
+            if skip_frame {
+                // If we're skipping our current frame, then we want to skip it for our children
+                // as well. This counts as the skipped frame for any children that already
+                // has this set to true (e.g. a third-level grandchild doesn't skip three frames).
+                // We'll still call 'enter_frame' on the child - it will recurse, propagating along
+                // the flag, and then set its own flag back to 'false'.
+                //
+                // We do *not* propagate `skip_frame=false` down to children, since a normally
+                // executing parent can add a child that should have its first frame skipped.
+
+                // FIXME - does this propagate through non-movie-clip children (Loader/Button)?
+                child
+                    .base_mut(context.gc_context)
+                    .set_skip_next_enter_frame(true);
+            }
             child.enter_frame(context);
         }
 
-        if self.0.read().skip_next_enter_frame() {
-            self.0
-                .write(context.gc_context)
+        if skip_frame {
+            self.base_mut(context.gc_context)
                 .set_skip_next_enter_frame(false);
             return;
         }
@@ -3069,14 +3095,6 @@ impl<'gc> MovieClipData<'gc> {
 
     fn set_playing(&mut self, value: bool) {
         self.flags.set(MovieClipFlags::PLAYING, value);
-    }
-
-    pub fn set_skip_next_enter_frame(&mut self, value: bool) {
-        self.flags.set(MovieClipFlags::SKIP_NEXT_ENTER_FRAME, value);
-    }
-
-    fn skip_next_enter_frame(&self) -> bool {
-        self.flags.contains(MovieClipFlags::SKIP_NEXT_ENTER_FRAME)
     }
 
     fn programmatically_played(&self) -> bool {
@@ -4392,7 +4410,7 @@ pub enum QueuedTagAction {
 
 bitflags! {
     /// Boolean state flags used by `MovieClip`.
-    #[derive(Collect)]
+    #[derive(Clone, Copy, Collect)]
     #[collect(require_static)]
     struct MovieClipFlags: u8 {
         /// Whether this `MovieClip` has run its initial frame.
@@ -4417,13 +4435,6 @@ bitflags! {
         /// Because AVM2 queues PlaceObject tags to run later, explicit gotos
         /// that happen while those tags run should cancel the loop.
         const LOOP_QUEUED = 1 << 4;
-
-        /// Flag set when we should skip running our next 'enterFrame'
-        /// for ourself *only* (we still run children).
-        /// This is set for objects constructed from ActionScript,
-        /// which are observed to lag behind objects placed by the timeline
-        /// (even if they are both placed in the same frame)
-        const SKIP_NEXT_ENTER_FRAME          = 1 << 5;
     }
 }
 

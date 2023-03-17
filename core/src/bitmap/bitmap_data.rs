@@ -194,7 +194,7 @@ bitflags! {
         const GREEN = 1 << 1;
         const BLUE = 1 << 2;
         const ALPHA = 1 << 3;
-        const RGB = Self::RED.bits | Self::GREEN.bits | Self::BLUE.bits;
+        const RGB = Self::RED.bits() | Self::GREEN.bits() | Self::BLUE.bits();
     }
 }
 
@@ -1101,8 +1101,8 @@ impl<'gc> BitmapData<'gc> {
                         // because of the saturating conversion to u8
                         *noise_c = if c == 3 { 1.0 } else { -1.0 };
 
-                        // SAFETY: `c` is always in 0..4, so `1 << c` is a valid `ChannelOptions`.
-                        let c = unsafe { ChannelOptions::from_bits_unchecked(1 << c) };
+                        // `c` is always in 0..4, so `1 << c` is never actually truncated here
+                        let c = ChannelOptions::from_bits_truncate(1 << c);
                         if channel_options.contains(c) {
                             *noise_c = turb.turbulence(
                                 channel,
@@ -1187,12 +1187,12 @@ impl<'gc> BitmapData<'gc> {
     /// This implements the threshold operation generically over the test operation performed for each pixel
     /// Returns the number of pixels modified
     #[allow(clippy::too_many_arguments)]
-    fn threshold_internal<Op: Fn(u32, u32) -> bool>(
+    pub fn threshold(
         &mut self,
         source_bitmap: &Self,
         src_rect: (i32, i32, i32, i32),
         dest_point: (i32, i32),
-        operation: Op,
+        operation: ThresholdOperation,
         threshold: u32,
         colour: u32,
         mask: u32,
@@ -1228,7 +1228,7 @@ impl<'gc> BitmapData<'gc> {
                     .to_un_multiplied_alpha();
 
                 // If the test, as defined by the operation pass then set to input colour
-                if operation(source_color.0 as u32 & mask, masked_threshold) {
+                if operation.matches(source_color.0 as u32 & mask, masked_threshold) {
                     modified_count += 1;
                     self.set_pixel32_raw(dest_x as u32, dest_y as u32, Color(colour as _));
                 } else {
@@ -1246,44 +1246,6 @@ impl<'gc> BitmapData<'gc> {
         }
 
         modified_count
-    }
-
-    /// Perform the threshold operation
-    /// Returns the number of modified pixels
-    #[allow(clippy::too_many_arguments)]
-    pub fn threshold(
-        &mut self,
-        source_bitmap: &Self,
-        src_rect: (i32, i32, i32, i32),
-        dest_point: (i32, i32),
-        operation: &WStr,
-        threshold: u32,
-        colour: u32,
-        mask: u32,
-        copy_source: bool,
-    ) -> u32 {
-        // Define the test that will be performed for each pixel
-        let op = match operation.to_utf8_lossy().as_ref() {
-            "==" => |v, mt| v == mt,
-            "!=" => |v, mt| v != mt,
-            "<" => |v, mt| v < mt,
-            "<=" => |v, mt| v <= mt,
-            ">" => |v, mt| v > mt,
-            ">=" => |v, mt| v >= mt,
-            // For undefined/invalid operations FP seems to just return 0 here
-            _ => return 0,
-        };
-
-        self.threshold_internal(
-            source_bitmap,
-            src_rect,
-            dest_point,
-            op,
-            threshold,
-            colour,
-            mask,
-            copy_source,
-        )
     }
 
     // Updates the data stored with our `BitmapHandle` if this `BitmapData`
@@ -1398,6 +1360,74 @@ impl<'gc> BitmapData<'gc> {
                 tracing::warn!("BitmapData.apply_filter: Renderer not yet implemented")
             }
         }
+    }
+
+    pub fn hit_test_point(&self, alpha_threshold: u32, test_point: (i32, i32)) -> bool {
+        if self.is_point_in_bounds(test_point.0, test_point.1) {
+            self.get_pixel32(test_point.0, test_point.1).alpha() as u32 >= alpha_threshold
+        } else {
+            false
+        }
+    }
+
+    pub fn hit_test_rectangle(
+        &self,
+        alpha_threshold: u32,
+        top_left: (i32, i32),
+        size: (i32, i32),
+    ) -> bool {
+        for x in 0..size.0 {
+            for y in 0..size.1 {
+                if self.hit_test_point(alpha_threshold, (top_left.0 + x, top_left.1 + y)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn hit_test_bitmapdata(
+        &self,
+        self_point: (i32, i32),
+        self_threshold: u32,
+        test: Option<&BitmapData>,
+        test_point: (i32, i32),
+        test_threshold: u32,
+    ) -> bool {
+        let xd = test_point.0 - self_point.0;
+        let yd = test_point.1 - self_point.1;
+        let self_width = self.width as i32;
+        let self_height = self.height as i32;
+        let (test_width, test_height) = if let Some(test) = test {
+            (test.width as i32, test.height as i32)
+        } else {
+            (self_width, self_height)
+        };
+        let (self_x0, test_x0, width) = if xd < 0 {
+            (0, -xd, self_width.min(test_width + xd))
+        } else {
+            (xd, 0, test_width.min(self_width - xd))
+        };
+        let (self_y0, test_y0, height) = if yd < 0 {
+            (0, -yd, self_height.min(test_height + yd))
+        } else {
+            (yd, 0, test_height.min(self_height - yd))
+        };
+        for x in 0..width {
+            for y in 0..height {
+                let self_is_opaque =
+                    self.hit_test_point(self_threshold, (self_x0 + x, self_y0 + y));
+                let test_is_opaque = if let Some(test) = test {
+                    test.hit_test_point(test_threshold, (test_x0 + x, test_y0 + y))
+                } else {
+                    self.hit_test_point(test_threshold, (test_x0 + x, test_y0 + y))
+                };
+                if self_is_opaque && test_is_opaque {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1540,6 +1570,47 @@ fn copy_pixels_to_bitmapdata(write: &mut BitmapData, buffer: &[u8], buffer_width
             // Ignore the original color entirely - the blending (including alpha)
             // was done by the renderer when it wrote over the previous texture contents.
             write.set_pixel32_raw(x, y, nc);
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ThresholdOperation {
+    Equals,
+    NotEquals,
+    LessThan,
+    LessThanOrEquals,
+    GreaterThan,
+    GreaterThanOrEquals,
+}
+
+impl ThresholdOperation {
+    pub fn from_wstr(str: &WStr) -> Option<Self> {
+        if str == b"==" {
+            Some(Self::Equals)
+        } else if str == b"!=" {
+            Some(Self::NotEquals)
+        } else if str == b"<" {
+            Some(Self::LessThan)
+        } else if str == b"<=" {
+            Some(Self::LessThanOrEquals)
+        } else if str == b">" {
+            Some(Self::GreaterThan)
+        } else if str == b">=" {
+            Some(Self::GreaterThanOrEquals)
+        } else {
+            None
+        }
+    }
+
+    pub fn matches(&self, value: u32, masked_threshold: u32) -> bool {
+        match self {
+            ThresholdOperation::Equals => value == masked_threshold,
+            ThresholdOperation::NotEquals => value != masked_threshold,
+            ThresholdOperation::LessThan => value < masked_threshold,
+            ThresholdOperation::LessThanOrEquals => value <= masked_threshold,
+            ThresholdOperation::GreaterThan => value > masked_threshold,
+            ThresholdOperation::GreaterThanOrEquals => value >= masked_threshold,
         }
     }
 }

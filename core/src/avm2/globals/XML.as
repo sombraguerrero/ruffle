@@ -1,5 +1,6 @@
 package {
     [Ruffle(InstanceAllocator)]
+    [Ruffle(CallHandler)]
     public final dynamic class XML {
         public function XML(value:* = undefined) {
             this.init(value);
@@ -8,6 +9,7 @@ package {
         private native function init(value:*):void;
 
         AS3 native function name():Object;
+        AS3 native function namespace(prefix:String = null):*;
         AS3 native function localName():Object;
         AS3 native function toXMLString():String;
         AS3 native function child(name:Object):XMLList;
@@ -15,6 +17,9 @@ package {
         AS3 native function elements(name:*):XMLList;
         AS3 native function attributes():XMLList;
         AS3 native function attribute(name:*):XMLList;
+        AS3 native function nodeKind():String;
+        AS3 native function appendChild(child:Object):XML;
+        AS3 native function descendants(name:Object = "*"):XMLList;
 
 
         AS3 native function toString():String;
@@ -27,6 +32,11 @@ package {
             // itself, instead of the AS3 method.
             return self.AS3::name();
         };
+
+        prototype.namespace = function(prefix:String = null):* {
+            var self:XML = this;
+            return self.AS3::namespace(prefix);
+        }
 
         prototype.localName = function():Object {
             var self:XML = this;
@@ -69,6 +79,21 @@ package {
         prototype.attribute = function(name:*):XMLList {
             var self:XML = this;
             return self.AS3::attribute(name);
+        };
+
+        prototype.nodeKind = function():String {
+            var self:XML = this;
+            return self.AS3::nodeKind();
+        };
+        
+        prototype.appendChild = function(child:Object):XML {
+            var self:XML = this;
+            return self.AS3::appendChild(child);
+        };
+
+        prototype.descendants = function(name:Object):XMLList {
+            var self:XML = this;
+            return self.AS3::descendants(name);
         };
     }
 }

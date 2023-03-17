@@ -4,6 +4,7 @@ use crate::avm2::activation::Activation;
 use crate::avm2::error::range_error;
 use crate::avm2::globals::flash::display::sprite::init_empty_sprite;
 use crate::avm2::object::{Object, TObject};
+use crate::avm2::parameters::ParametersExt;
 use crate::avm2::value::Value;
 use crate::avm2::{ArrayObject, ArrayStorage, Error};
 use crate::context::UpdateContext;
@@ -153,11 +154,7 @@ pub fn get_child_by_name<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_container())
     {
-        let name = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_string(activation)?;
+        let name = args.get_string(activation, 0)?;
         if let Some(child) = dobj.child_by_name(&name, false) {
             return Ok(child.object2());
         } else {
@@ -243,11 +240,8 @@ pub fn remove_child<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     if let Some(parent) = this.and_then(|this| this.as_display_object()) {
         let child = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .as_object()
-            .and_then(|o| o.as_display_object())
+            .get_object(activation, 0, "child")?
+            .as_display_object()
             .ok_or("ArgumentError: Child not a valid display object")?;
 
         validate_remove_operation(parent, child)?;
@@ -636,11 +630,7 @@ pub fn set_mouse_children<'gc>(
         .and_then(|this| this.as_display_object())
         .and_then(|this| this.as_container())
     {
-        let mouse_children = args
-            .get(0)
-            .cloned()
-            .unwrap_or(Value::Undefined)
-            .coerce_to_boolean();
+        let mouse_children = args.get_bool(0);
 
         dobj.raw_container_mut(activation.context.gc_context)
             .set_mouse_children(mouse_children);
